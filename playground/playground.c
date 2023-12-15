@@ -21,9 +21,9 @@
   (LINE_PERIOD_NS - VISIBLE_WIDTH_NS - FRONT_PORCH_WIDTH_NS - HSYNC_WIDTH_NS)
 #define DOT_PERIOD_NS (LINE_PERIOD_NS / DOTS_PER_LINE) // Period of one dot (ns)
 
-// Desired timing state machine clock frequency in hertz. Should be twice dot
-// frequency.
-#define TIMING_SM_FREQ (2 * DOTS_PER_LINE * (1e9 / LINE_PERIOD_NS))
+// Desired timing state machine clock frequency in hertz. Should be equal to the
+// dot frequency.
+#define TIMING_SM_FREQ (DOTS_PER_LINE * (1e9 / LINE_PERIOD_NS))
 
 static uint32_t visible_line[DOTS_PER_LINE >> 4];
 static uint32_t blank_line[DOTS_PER_LINE >> 4];
@@ -33,17 +33,7 @@ static uint32_t short_long_line[DOTS_PER_LINE >> 4];
 static uint32_t short_short_line[DOTS_PER_LINE >> 4];
 static uint32_t *frame_lines[LINES_PER_FRAME];
 
-static inline void timing_program_init(PIO pio, uint sm, uint offset) {
-  pio_sm_config c = timing_program_get_default_config(offset);
-  sm_config_set_out_pins(&c, SYNC_GPIO_PIN, 2);
-  sm_config_set_out_shift(&c, true, true, 0);
-  sm_config_set_clkdiv(&c, ((float)clock_get_hz(clk_sys)) / TIMING_SM_FREQ);
-  pio_gpio_init(pio, SYNC_GPIO_PIN);
-  pio_gpio_init(pio, VIDEO_GPIO_PIN);
-  pio_sm_set_consecutive_pindirs(pio, sm, SYNC_GPIO_PIN, 2, true);
-  pio_sm_init(pio, sm, offset, &c);
-  pio_sm_set_enabled(pio, sm, true);
-}
+static inline void timing_program_init(PIO pio, uint sm, uint offset);
 
 int main() {
   // Check that the number of dots per line is a multiple of 16.
@@ -60,7 +50,7 @@ int main() {
 
     if ((t >= (HSYNC_WIDTH_NS + BACK_PORCH_WIDTH_NS)) &&
         (t < (HSYNC_WIDTH_NS + BACK_PORCH_WIDTH_NS + VISIBLE_WIDTH_NS))) {
-      visible = 1;
+      visible = (i >> 1) & 0x1;
     }
 
     visible_line[i >> 4] &= ~(0x3 << shift);
@@ -147,4 +137,17 @@ int main() {
       }
     }
   }
+}
+
+void timing_program_init(PIO pio, uint sm, uint offset) {
+  pio_sm_config c = timing_program_get_default_config(offset);
+  sm_config_set_out_pins(&c, SYNC_GPIO_PIN, 2);
+  sm_config_set_out_shift(&c, true, true, 0);
+  sm_config_set_clkdiv(&c, ((float)clock_get_hz(clk_sys)) / TIMING_SM_FREQ);
+  sm_config_set_wrap(&c, offset + timing_wrap_target, offset + timing_wrap);
+  pio_gpio_init(pio, SYNC_GPIO_PIN);
+  pio_gpio_init(pio, VIDEO_GPIO_PIN);
+  pio_sm_set_consecutive_pindirs(pio, sm, SYNC_GPIO_PIN, 2, true);
+  pio_sm_init(pio, sm, offset, &c);
+  pio_sm_set_enabled(pio, sm, true);
 }

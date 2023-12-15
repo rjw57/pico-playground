@@ -1,6 +1,6 @@
 .program timing
 
-; Repeatedly pull 2 bits from the TX FIFO and write them to the output pins
-loop:
-  out pins, 2
-  jmp loop
+.wrap_target
+    ; Repeatedly pull 2 bits from the TX FIFO and write them to the output pins
+    out pins, 2
+.wrap
