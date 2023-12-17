@@ -60,15 +60,15 @@ public side_effect_clear_trigger:
 .program video_output
 public entry_point:
     set pins, 0     ; Blank output video
-    out x, 32       ; Read dots per line
+    out x, 32       ; Read dots per line - 1
 
 .wrap_target
-    mov y, x        ; Set Y = dots per line
+    mov y, x        ; Set Y = dots per line - 1
     wait 1 irq 4    ; Wait for trigger and clear it
 
 loop:
-    set pins, 1     ; Write output video
-    jmp y-- loop
+    out pins, 1     ; Write output video
+    jmp y-- loop    ; If Y != 0, decrement otherwise jump
 
     set pins, 0     ; Blank output video
 .wrap

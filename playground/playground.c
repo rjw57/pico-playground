@@ -1,9 +1,14 @@
+#include <string.h>
+
 #include "hardware/clocks.h"
+#include "hardware/dma.h"
 #include "hardware/pio.h"
 #include "pico/stdlib.h"
 
 #include "timing.pio.h"
 #include "tvout.pio.h"
+
+#include "bronwen.h"
 
 // TV signal timing. See http://martin.hinner.info/vga/pal.html. We repeatedly send the first field
 // which is sometimes known as "240p". (Or the PAL equivalent of "272p".) This works out as a
@@ -56,43 +61,42 @@ uint32_t timing_visible_line[] = {
 };
 #define TIMING_VISIBLE_LINE_LEN (sizeof(timing_visible_line) / sizeof(timing_visible_line[0]))
 
-// Timing program for vsync lines
-uint32_t timing_vsync_lines[] = {
-    // 5 "long" sync pulses
+// "Long" sync pulse "half line"
+uint32_t timing_long_sync_half_line[] = {
     line_timing_encode(0, LONG_SYNC_WIDTH_NS, SIDE_EFFECT_NOP),
     line_timing_encode(1, ((LINE_PERIOD_NS >> 1) - LONG_SYNC_WIDTH_NS), SIDE_EFFECT_NOP),
-    line_timing_encode(0, LONG_SYNC_WIDTH_NS, SIDE_EFFECT_NOP),
-    line_timing_encode(1, ((LINE_PERIOD_NS >> 1) - LONG_SYNC_WIDTH_NS), SIDE_EFFECT_NOP),
-    line_timing_encode(0, LONG_SYNC_WIDTH_NS, SIDE_EFFECT_NOP),
-    line_timing_encode(1, ((LINE_PERIOD_NS >> 1) - LONG_SYNC_WIDTH_NS), SIDE_EFFECT_NOP),
-    line_timing_encode(0, LONG_SYNC_WIDTH_NS, SIDE_EFFECT_NOP),
-    line_timing_encode(1, ((LINE_PERIOD_NS >> 1) - LONG_SYNC_WIDTH_NS), SIDE_EFFECT_NOP),
-    line_timing_encode(0, LONG_SYNC_WIDTH_NS, SIDE_EFFECT_NOP),
-    line_timing_encode(1, ((LINE_PERIOD_NS >> 1) - LONG_SYNC_WIDTH_NS), SIDE_EFFECT_NOP),
+};
+#define TIMING_LONG_SYNC_HALF_LINE_LEN                                                             \
+  (sizeof(timing_long_sync_half_line) / sizeof(timing_long_sync_half_line[0]))
 
-    // 5 "short" sync pulses
-    line_timing_encode(0, SHORT_SYNC_WIDTH_NS, SIDE_EFFECT_NOP),
-    line_timing_encode(1, ((LINE_PERIOD_NS >> 1) - SHORT_SYNC_WIDTH_NS), SIDE_EFFECT_NOP),
-    line_timing_encode(0, SHORT_SYNC_WIDTH_NS, SIDE_EFFECT_NOP),
-    line_timing_encode(1, ((LINE_PERIOD_NS >> 1) - SHORT_SYNC_WIDTH_NS), SIDE_EFFECT_NOP),
-    line_timing_encode(0, SHORT_SYNC_WIDTH_NS, SIDE_EFFECT_NOP),
-    line_timing_encode(1, ((LINE_PERIOD_NS >> 1) - SHORT_SYNC_WIDTH_NS), SIDE_EFFECT_NOP),
-    line_timing_encode(0, SHORT_SYNC_WIDTH_NS, SIDE_EFFECT_NOP),
-    line_timing_encode(1, ((LINE_PERIOD_NS >> 1) - SHORT_SYNC_WIDTH_NS), SIDE_EFFECT_NOP),
+// "Short" sync pulse "half line"
+uint32_t timing_short_sync_half_line[] = {
     line_timing_encode(0, SHORT_SYNC_WIDTH_NS, SIDE_EFFECT_NOP),
     line_timing_encode(1, ((LINE_PERIOD_NS >> 1) - SHORT_SYNC_WIDTH_NS), SIDE_EFFECT_NOP),
 };
-#define TIMING_VSYNC_LINES_LEN (sizeof(timing_vsync_lines) / sizeof(timing_vsync_lines[0]))
+#define TIMING_SHORT_SYNC_HALF_LINE_LEN                                                            \
+  (sizeof(timing_short_sync_half_line) / sizeof(timing_short_sync_half_line[0]))
+
+// Frame buffer is big-endian within a 32-bit word so the MSB of the word is the left-most pixel.
+// Note that the pico itself is little-endian and so, with an array of bytes, the first byte in
+// memory is the right-most group of 8 pixels.
+
+// uint32_t frame_buffer[VISIBLE_LINES_PER_FIELD * (VISIBLE_DOTS_PER_LINE >> 5)];
 
 int main() {
   // Check that all periods are an integer multiple of character period
   static_assert(LINE_PERIOD_NS % DOT_PERIOD_NS == 0);
 
-  // Check that the number of *visible* dots per line is a multiple of 8.
-  static_assert((VISIBLE_DOTS_PER_LINE & 0x7) == 0);
+  // Check that the number of *visible* dots per line is a multiple of 32.
+  static_assert((VISIBLE_DOTS_PER_LINE & 0x1f) == 0);
 
   // Check that the number of *visible* lines per field is a multiple of 8.
   static_assert((VISIBLE_LINES_PER_FIELD & 0x7) == 0);
+
+  // Clear frame buffer to vertical lines.
+  // for(size_t i=0; i<VISIBLE_LINES_PER_FIELD * (VISIBLE_DOTS_PER_LINE >> 5); i++) {
+  //  frame_buffer[i] = i;
+  //}
 
   // Ensure IRQ 4 of the PIO is clear
   PIO pio = pio0;
@@ -104,7 +108,16 @@ int main() {
   video_output_program_init(pio, video_output_sm, video_output_offset, VIDEO_GPIO_PIN,
                             DOT_CLOCK_FREQ);
   pio_sm_set_enabled(pio, video_output_sm, true);
-  pio_sm_put(pio, video_output_sm, VISIBLE_DOTS_PER_LINE);
+  pio_sm_put(pio, video_output_sm, VISIBLE_DOTS_PER_LINE - 1);
+
+  // Configure DMA channel for copying frame buffer to video output.
+  uint video_dma_chan = 0;
+  dma_channel_config c = dma_channel_get_default_config(video_dma_chan);
+  dma_channel_claim(video_dma_chan);
+  channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
+  channel_config_set_read_increment(&c, true);
+  channel_config_set_write_increment(&c, false);
+  channel_config_set_dreq(&c, pio_get_dreq(pio, video_output_sm, true));
 
   // Configure and enable timing program.
   uint line_timing_offset = pio_add_program(pio, &line_timing_program);
@@ -113,19 +126,43 @@ int main() {
   pio_sm_set_enabled(pio, line_timing_sm, true);
 
   while (true) {
-    for (int i = 0; i < TIMING_VSYNC_LINES_LEN; i++) {
-      pio_sm_put_blocking(pio, line_timing_sm, timing_vsync_lines[i]);
+    // Transfer framebuffer for this field.
+    dma_channel_configure(video_dma_chan, &c, &pio->txf[video_output_sm], bronwen_data,
+                          VISIBLE_LINES_PER_FIELD * (VISIBLE_DOTS_PER_LINE >> 5), true);
+
+    // 5 "long pulse" half lines
+    for (int j = 0; j < VSYNC_LINES_PER_FIELD; j++) {
+      for (int i = 0; i < TIMING_LONG_SYNC_HALF_LINE_LEN; i++) {
+        pio_sm_put_blocking(pio, line_timing_sm, timing_long_sync_half_line[i]);
+      }
     }
-    for (int j = VSYNC_LINES_PER_FIELD; j < LINES_PER_FIELD; j++) {
-      if ((j >= VERT_VISIBLE_START_LINE) &&
-          (j < VERT_VISIBLE_START_LINE + VISIBLE_LINES_PER_FIELD)) {
-        for (int i = 0; i < TIMING_VISIBLE_LINE_LEN; i++) {
-          pio_sm_put_blocking(pio, line_timing_sm, timing_visible_line[i]);
-        }
-      } else {
-        for (int i = 0; i < TIMING_BLANK_LINE_LEN; i++) {
-          pio_sm_put_blocking(pio, line_timing_sm, timing_blank_line[i]);
-        }
+
+    // 5 "short pulse" half lines
+    for (int j = 0; j < VSYNC_LINES_PER_FIELD; j++) {
+      for (int i = 0; i < TIMING_SHORT_SYNC_HALF_LINE_LEN; i++) {
+        pio_sm_put_blocking(pio, line_timing_sm, timing_short_sync_half_line[i]);
+      }
+    }
+
+    // Blank above visible area
+    for (int j = VSYNC_LINES_PER_FIELD; j < VERT_VISIBLE_START_LINE; j++) {
+      for (int i = 0; i < TIMING_BLANK_LINE_LEN; i++) {
+        pio_sm_put_blocking(pio, line_timing_sm, timing_blank_line[i]);
+      }
+    }
+
+    // Visible area
+    for (int j = VERT_VISIBLE_START_LINE; j < VERT_VISIBLE_START_LINE + VISIBLE_LINES_PER_FIELD;
+         j++) {
+      for (int i = 0; i < TIMING_VISIBLE_LINE_LEN; i++) {
+        pio_sm_put_blocking(pio, line_timing_sm, timing_visible_line[i]);
+      }
+    }
+
+    // Blank below visible area
+    for (int j = VERT_VISIBLE_START_LINE + VISIBLE_LINES_PER_FIELD; j < LINES_PER_FIELD; j++) {
+      for (int i = 0; i < TIMING_BLANK_LINE_LEN; i++) {
+        pio_sm_put_blocking(pio, line_timing_sm, timing_blank_line[i]);
       }
     }
   }
