@@ -4,22 +4,28 @@
 
 #include "timing.pio.h"
 
-// See http://martin.hinner.info/vga/pal.html
-#define LINE_PERIOD_NS 64000      // Period of one line of video (ns)
-#define LINES_PER_FRAME 625       // Number of lines in frame
-#define DOTS_PER_LINE 640         // Dots per line (including invisible area)
-#define HSYNC_WIDTH_NS 4700       // Line sync pulse width (ns)
-#define FRONT_PORCH_WIDTH_NS 1650 // Front porch width (ns)
-#define VISIBLE_WIDTH_NS 52000    // Visible area (ns)
-#define SHORT_SYNC_WIDTH_NS 2350  // "Short" sync pulse width (ns)
-#define LONG_SYNC_WIDTH_NS 27300  // "Long" sync pulse width (ns)
+// TV signal timing. See http://martin.hinner.info/vga/pal.html.
+#define LINE_PERIOD_NS 64000                               // Period of one line of video (ns)
+#define LINES_PER_FRAME 625                                // Number of lines in frame
+#define HSYNC_WIDTH_NS 4700                                // Line sync pulse width (ns)
+#define HORIZ_OVERSCAN_NS 4000                             // Horizontal overscan (ns)
+#define VERT_OVERSCAN_LINES 4                              // Vertical overscan (lines per *field*)
+#define FRONT_PORCH_WIDTH_NS (1650 + HORIZ_OVERSCAN_NS)    // Front porch width (ns)
+#define VISIBLE_WIDTH_NS (52000 - (2 * HORIZ_OVERSCAN_NS)) // Visible area (ns)
+#define SHORT_SYNC_WIDTH_NS 2350                           // "Short" sync pulse width (ns)
+#define LONG_SYNC_WIDTH_NS 27300                           // "Long" sync pulse width (ns)
+#define DOTS_PER_LINE 640 // Dots per line (including invisible area)
 
-#define SYNC_GPIO_PIN 16                   // == pin 21
-#define VIDEO_GPIO_PIN (SYNC_GPIO_PIN + 1) // == pin 22
-
-#define BACK_PORCH_WIDTH_NS                                                    \
+// Implied back porch period.
+#define BACK_PORCH_WIDTH_NS                                                                        \
   (LINE_PERIOD_NS - VISIBLE_WIDTH_NS - FRONT_PORCH_WIDTH_NS - HSYNC_WIDTH_NS)
-#define DOT_PERIOD_NS (LINE_PERIOD_NS / DOTS_PER_LINE) // Period of one dot (ns)
+
+// Implied dot period and dots per visible line.
+#define DOT_PERIOD_NS (LINE_PERIOD_NS / DOTS_PER_LINE)
+#define VISIBLE_DOTS_PER_LINE (VISIBLE_WIDTH_NS / DOT_PERIOD_NS)
+
+#define SYNC_GPIO_PIN 16                   // GPIO pin for SYNC signal == pin 21
+#define VIDEO_GPIO_PIN (SYNC_GPIO_PIN + 1) // == pin 22
 
 // Desired timing state machine clock frequency in hertz. Should be equal to the
 // dot frequency.
@@ -36,9 +42,11 @@ static uint32_t *frame_lines[LINES_PER_FRAME];
 static inline void timing_program_init(PIO pio, uint sm, uint offset);
 
 int main() {
-  // Check that the number of dots per line is a multiple of 16.
-  static_assert((DOTS_PER_LINE & 0xf) == 0);
-  static_assert((LINE_PERIOD_NS % DOT_PERIOD_NS) == 0);
+  // Check that all periods are an integer multiple of character period
+  static_assert(LINE_PERIOD_NS % DOT_PERIOD_NS == 0);
+
+  // Check that the number of *visible* dots per line is a multiple of 8.
+  static_assert((VISIBLE_DOTS_PER_LINE & 0x7) == 0);
 
   for (int i = 0, t = 0; i < DOTS_PER_LINE; i++, t += DOT_PERIOD_NS) {
     uint sync = 1, visible = 0;
@@ -101,9 +109,9 @@ int main() {
       frame_lines[i] = long_short_line;
     } else if (i < 5) {
       frame_lines[i] = short_short_line;
-    } else if (i < 23) {
+    } else if (i < 23 + VERT_OVERSCAN_LINES) {
       frame_lines[i] = blank_line;
-    } else if (i < 310) {
+    } else if (i < 310 - VERT_OVERSCAN_LINES) {
       frame_lines[i] = visible_line;
     } else if (i < 312) {
       frame_lines[i] = short_short_line;
@@ -113,9 +121,9 @@ int main() {
       frame_lines[i] = long_long_line;
     } else if (i < 317) {
       frame_lines[i] = short_short_line;
-    } else if (i < 335) {
+    } else if (i < 335 + VERT_OVERSCAN_LINES) {
       frame_lines[i] = blank_line;
-    } else if (i < 622) {
+    } else if (i < 622 - VERT_OVERSCAN_LINES) {
       frame_lines[i] = visible_line;
     } else {
       frame_lines[i] = short_short_line;
