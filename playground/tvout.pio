@@ -1,0 +1,89 @@
+.program line_timing
+
+; Each 32-bit word in the FIFO is split into the following way:
+;
+; Meaning | S  | Cycles    | Side-effect |
+; Bit     | 31 | 30 ... 16 | 15 ...... 0 |
+;
+; S is the sync bit to set for that state, Cycles is the number of cycles - 5 for that state and
+; side-effect is a PIO instruction to execute for that state.
+;
+; The side effect will start execution 3 cycles before the pin changes state.
+
+.wrap_target
+    out exec, 16    ; Pull an instruction representing the side effect for this state.
+    out x, 15       ; Number of cycles to wait. Pulse length will be X + 5 cycles long.
+    out pins, 1     ; Set pin value.
+loop:
+    jmp x-- loop    ; Loop until X is zero
+.wrap
+
+% c-sdk {
+// Period of line timing PIO clock (ns). E.g. 50 => clock frequency of 20MHz
+#define LINE_TIMING_CLOCK_PERIOD_NS 50
+
+// Implied timing PIO frequency
+#define LINE_TIMING_CLOCK_FREQ (1e9 / LINE_TIMING_CLOCK_PERIOD_NS)
+
+// Encode a line timing instruction
+#define line_timing_encode(p, t_ns, side_effect) \
+  ((((p) & 0x1)<<31) | (((((t_ns) / LINE_TIMING_CLOCK_PERIOD_NS)-5) & 0x7fff) << 16) | ((side_effect) & 0xffff))
+
+static inline void line_timing_program_init(PIO pio, uint sm, uint offset, uint sync_pin) {
+  pio_sm_config c = line_timing_program_get_default_config(offset);
+  sm_config_set_out_pins(&c, sync_pin, 1);
+  sm_config_set_out_shift(&c, true, true, 0);
+  sm_config_set_clkdiv(&c, ((float)clock_get_hz(clk_sys)) / LINE_TIMING_CLOCK_FREQ);
+  pio_gpio_init(pio, sync_pin);
+  pio_sm_set_consecutive_pindirs(pio, sm, sync_pin, 1, true);
+  pio_sm_init(pio, sm, offset, &c);
+}
+%}
+
+.program timing_states
+
+public side_effect_nop:
+    nop             ; No side-effect
+public side_effect_set_trigger:
+    irq set 4       ; Set IRQ 4
+public side_effect_clear_trigger:
+    irq clear 4     ; Clear IRQ 4
+
+% c-sdk {
+#define SIDE_EFFECT_NOP (timing_states_program_instructions[timing_states_offset_side_effect_nop])
+#define SIDE_EFFECT_SET_TRIGGER \
+    (timing_states_program_instructions[timing_states_offset_side_effect_set_trigger])
+#define SIDE_EFFECT_CLEAR_TRIGGER \
+    (timing_states_program_instructions[timing_states_offset_side_effect_clear_trigger])
+%}
+
+.program video_output
+public entry_point:
+    set pins, 0     ; Blank output video
+    out x, 32       ; Read dots per line
+
+.wrap_target
+    mov y, x        ; Set Y = dots per line
+    wait 1 irq 4    ; Wait for trigger and clear it
+
+loop:
+    set pins, 1     ; Write output video
+    jmp y-- loop
+
+    set pins, 0     ; Blank output video
+.wrap
+
+% c-sdk {
+static inline void video_output_program_init(
+  PIO pio, uint sm, uint offset, uint video_pin, float dot_clock_freq
+) {
+  pio_sm_config c = video_output_program_get_default_config(offset);
+  sm_config_set_out_pins(&c, video_pin, 1);
+  sm_config_set_set_pins(&c, video_pin, 1);
+  sm_config_set_out_shift(&c, false, true, 0);
+  sm_config_set_clkdiv(&c, ((float)clock_get_hz(clk_sys)) / (2 * dot_clock_freq));
+  pio_gpio_init(pio, video_pin);
+  pio_sm_set_consecutive_pindirs(pio, sm, video_pin, 1, true);
+  pio_sm_init(pio, sm, offset, &c);
+}
+%}
