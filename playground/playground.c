@@ -4,17 +4,22 @@
 
 #include "timing.pio.h"
 
-// TV signal timing. See http://martin.hinner.info/vga/pal.html.
+// TV signal timing. See http://martin.hinner.info/vga/pal.html. We repeatedly send the first field
+// which is sometimes known as "240p". (Or the PAL equivalent of "272p".) This works out as a
+// resolution of 352 x 272.
 #define LINE_PERIOD_NS 64000                               // Period of one line of video (ns)
-#define LINES_PER_FRAME 625                                // Number of lines in frame
+#define LINES_PER_FIELD 310                                // Number of lines in a *field*
 #define HSYNC_WIDTH_NS 4700                                // Line sync pulse width (ns)
 #define HORIZ_OVERSCAN_NS 4000                             // Horizontal overscan (ns)
-#define VERT_OVERSCAN_LINES 4                              // Vertical overscan (lines per *field*)
+#define VERT_OVERSCAN_LINES 8                              // Vertical overscan (lines per *field*)
+#define VERT_VISIBLE_START_LINE 23 + VERT_OVERSCAN_LINES   // Start line of visible data (0-based)
+#define VISIBLE_LINES_PER_FIELD 272                        // Number of visible lines per field
 #define FRONT_PORCH_WIDTH_NS (1650 + HORIZ_OVERSCAN_NS)    // Front porch width (ns)
 #define VISIBLE_WIDTH_NS (52000 - (2 * HORIZ_OVERSCAN_NS)) // Visible area (ns)
 #define SHORT_SYNC_WIDTH_NS 2350                           // "Short" sync pulse width (ns)
 #define LONG_SYNC_WIDTH_NS 27300                           // "Long" sync pulse width (ns)
-#define DOTS_PER_LINE 640 // Dots per line (including invisible area)
+
+#define DOTS_PER_LINE 512 // Dots per line (including invisible area)
 
 // Implied back porch period.
 #define BACK_PORCH_WIDTH_NS                                                                        \
@@ -32,12 +37,13 @@
 #define TIMING_SM_FREQ (DOTS_PER_LINE * (1e9 / LINE_PERIOD_NS))
 
 static uint32_t visible_line[DOTS_PER_LINE >> 4];
+static uint32_t visible_line_b[DOTS_PER_LINE >> 4];
 static uint32_t blank_line[DOTS_PER_LINE >> 4];
 static uint32_t long_long_line[DOTS_PER_LINE >> 4];
 static uint32_t long_short_line[DOTS_PER_LINE >> 4];
 static uint32_t short_long_line[DOTS_PER_LINE >> 4];
 static uint32_t short_short_line[DOTS_PER_LINE >> 4];
-static uint32_t *frame_lines[LINES_PER_FRAME];
+static uint32_t *frame_lines[LINES_PER_FIELD];
 
 static inline void timing_program_init(PIO pio, uint sm, uint offset);
 
@@ -48,8 +54,11 @@ int main() {
   // Check that the number of *visible* dots per line is a multiple of 8.
   static_assert((VISIBLE_DOTS_PER_LINE & 0x7) == 0);
 
+  // Check that the number of *visible* lines per field is a multiple of 8.
+  static_assert((VISIBLE_LINES_PER_FIELD & 0x7) == 0);
+
   for (int i = 0, t = 0; i < DOTS_PER_LINE; i++, t += DOT_PERIOD_NS) {
-    uint sync = 1, visible = 0;
+    uint sync = 1, visible = 0, visible_b = 0;
     uint shift = (i & 0xf) << 1;
 
     if (t < HSYNC_WIDTH_NS) {
@@ -58,11 +67,14 @@ int main() {
 
     if ((t >= (HSYNC_WIDTH_NS + BACK_PORCH_WIDTH_NS)) &&
         (t < (HSYNC_WIDTH_NS + BACK_PORCH_WIDTH_NS + VISIBLE_WIDTH_NS))) {
-      visible = (i >> 1) & 0x1;
+      visible = i & 0x1;
+      visible_b = (~i) & 0x1;
     }
 
     visible_line[i >> 4] &= ~(0x3 << shift);
     visible_line[i >> 4] |= ((sync & 0x1) | ((visible & 0x1) << 1)) << shift;
+    visible_line_b[i >> 4] &= ~(0x3 << shift);
+    visible_line_b[i >> 4] |= ((sync & 0x1) | ((visible_b & 0x1) << 1)) << shift;
 
     blank_line[i >> 4] &= ~(0x3 << shift);
     blank_line[i >> 4] |= (sync & 0x1) << shift;
@@ -102,31 +114,23 @@ int main() {
     short_short_line[j >> 4] |= (short_sync & 0x1) << shift_j;
   }
 
-  for (int i = 0; i < LINES_PER_FRAME; i++) {
+  for (int i = 0; i < LINES_PER_FIELD; i++) {
     if (i < 2) {
       frame_lines[i] = long_long_line;
     } else if (i < 3) {
       frame_lines[i] = long_short_line;
     } else if (i < 5) {
       frame_lines[i] = short_short_line;
-    } else if (i < 23 + VERT_OVERSCAN_LINES) {
+    } else if (i < VERT_VISIBLE_START_LINE) {
       frame_lines[i] = blank_line;
-    } else if (i < 310 - VERT_OVERSCAN_LINES) {
-      frame_lines[i] = visible_line;
-    } else if (i < 312) {
-      frame_lines[i] = short_short_line;
-    } else if (i < 313) {
-      frame_lines[i] = short_long_line;
-    } else if (i < 315) {
-      frame_lines[i] = long_long_line;
-    } else if (i < 317) {
-      frame_lines[i] = short_short_line;
-    } else if (i < 335 + VERT_OVERSCAN_LINES) {
-      frame_lines[i] = blank_line;
-    } else if (i < 622 - VERT_OVERSCAN_LINES) {
-      frame_lines[i] = visible_line;
+    } else if (i < VERT_VISIBLE_START_LINE + VISIBLE_LINES_PER_FIELD) {
+      if(i & 0x1) {
+        frame_lines[i] = visible_line;
+      } else {
+        frame_lines[i] = visible_line_b;
+      }
     } else {
-      frame_lines[i] = short_short_line;
+      frame_lines[i] = blank_line;
     }
   }
 
@@ -136,7 +140,7 @@ int main() {
   timing_program_init(pio, timing_sm, timing_offset);
 
   while (true) {
-    for (int i = 0; i < LINES_PER_FRAME; i++) {
+    for (int i = 0; i < LINES_PER_FIELD; i++) {
       uint32_t *l = frame_lines[i];
       for (int j = 0; j < (DOTS_PER_LINE >> 4); j++) {
         while (pio_sm_is_tx_fifo_full(pio, timing_sm)) {
