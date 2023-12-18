@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdalign.h>
 #include <string.h>
 
@@ -79,8 +80,7 @@ alignas(8) uint32_t timing_short_sync_half_line[] = {
 // Frame buffer is big-endian within a 32-bit word so the MSB of the word is the left-most pixel.
 // Note that the pico itself is little-endian and so, with an array of bytes, the first byte in
 // memory is the right-most group of 8 pixels.
-
-// uint32_t frame_buffer[VISIBLE_LINES_PER_FIELD * (VISIBLE_DOTS_PER_LINE >> 5)];
+uint32_t frame_buffer[VISIBLE_LINES_PER_FIELD * (VISIBLE_DOTS_PER_LINE >> 5)];
 
 // Configure a DMA channel to copy the frame buffer into the video output PIO state machine.
 static inline dma_channel_config get_video_output_dma_channel_config(uint dma_chan, PIO pio,
@@ -116,26 +116,12 @@ static void field_timing_dma_handler() {
   // 0 - vsync A, 1 - vsync B, 2 - top blank lines, 3 - visible lines, 4 - bottom blank lines
   static uint phase = 0;
 
-  // Statically assert alignment and length of timing programs. Alignment is necessary to allow DMA
-  // in ring mode and the length needs to be known because we need to set the number of significan
-  // bits in ring mode.
-  static_assert(alignof(timing_long_sync_half_line) == sizeof(timing_long_sync_half_line));
-  static_assert(TIMING_LONG_SYNC_HALF_LINE_LEN == 2);
-  static_assert(alignof(timing_short_sync_half_line) == sizeof(timing_short_sync_half_line));
-  static_assert(TIMING_SHORT_SYNC_HALF_LINE_LEN == 2);
-  static_assert(alignof(timing_blank_line) == sizeof(timing_blank_line));
-  static_assert(TIMING_BLANK_LINE_LEN == 2);
-  static_assert(alignof(timing_visible_line) == sizeof(timing_visible_line));
-  static_assert(TIMING_VISIBLE_LINE_LEN == 4);
-  static_assert(VERT_VISIBLE_START_LINE > VSYNC_LINES_PER_FIELD);
-  static_assert(LINES_PER_FIELD > (VERT_VISIBLE_START_LINE + VISIBLE_LINES_PER_FIELD));
-
   dma_channel_acknowledge_irq0(field_timing_dma_channel);
 
   switch (phase) {
   case 0:
     // Start frame buffer transfer for the next field.
-    dma_channel_transfer_from_buffer_now(video_dma_channel, bronwen_data,
+    dma_channel_transfer_from_buffer_now(video_dma_channel, frame_buffer,
                                          VISIBLE_LINES_PER_FIELD * (VISIBLE_DOTS_PER_LINE >> 5));
     // "long pulse" half lines
     channel_config_set_ring(&field_timing_dma_channel_config, false, 3);
@@ -180,7 +166,9 @@ static void field_timing_dma_handler() {
   phase = (phase + 1) % 5;
 }
 
-int main() {
+// This function contains all static asserts. It's never called but the compiler will raise a
+// diagnostic if the assertions fail.
+static inline void all_static_asserts() {
   // Check that all periods are an integer multiple of character period
   static_assert(LINE_PERIOD_NS % DOT_PERIOD_NS == 0);
 
@@ -190,10 +178,24 @@ int main() {
   // Check that the number of *visible* lines per field is a multiple of 8.
   static_assert((VISIBLE_LINES_PER_FIELD & 0x7) == 0);
 
-  // Clear frame buffer to vertical lines.
-  // for(size_t i=0; i<VISIBLE_LINES_PER_FIELD * (VISIBLE_DOTS_PER_LINE >> 5); i++) {
-  //  frame_buffer[i] = i;
-  //}
+  // Statically assert alignment and length of timing programs. Alignment is necessary to allow DMA
+  // in ring mode and the length needs to be known because we need to set the number of significan
+  // bits in ring mode.
+  static_assert(alignof(timing_long_sync_half_line) == sizeof(timing_long_sync_half_line));
+  static_assert(TIMING_LONG_SYNC_HALF_LINE_LEN == 2);
+  static_assert(alignof(timing_short_sync_half_line) == sizeof(timing_short_sync_half_line));
+  static_assert(TIMING_SHORT_SYNC_HALF_LINE_LEN == 2);
+  static_assert(alignof(timing_blank_line) == sizeof(timing_blank_line));
+  static_assert(TIMING_BLANK_LINE_LEN == 2);
+  static_assert(alignof(timing_visible_line) == sizeof(timing_visible_line));
+  static_assert(TIMING_VISIBLE_LINE_LEN == 4);
+  static_assert(VERT_VISIBLE_START_LINE > VSYNC_LINES_PER_FIELD);
+  static_assert(LINES_PER_FIELD > (VERT_VISIBLE_START_LINE + VISIBLE_LINES_PER_FIELD));
+}
+
+int main() {
+  stdio_init_all();
+  printf("Hello, world!\n");
 
   // Ensure IRQ 4 of the PIO is clear
   PIO pio = pio0;
@@ -225,9 +227,8 @@ int main() {
   dma_channel_claim(video_dma_channel);
   dma_channel_config video_dma_channel_config =
       get_video_output_dma_channel_config(video_dma_channel, pio, video_output_sm);
-  dma_channel_configure(video_dma_channel, &video_dma_channel_config, &pio->txf[video_output_sm],
-                        bronwen_data, VISIBLE_LINES_PER_FIELD * (VISIBLE_DOTS_PER_LINE >> 5),
-                        false);
+  dma_channel_set_config(video_dma_channel, &video_dma_channel_config, false);
+  dma_channel_set_write_addr(video_dma_channel, &pio->txf[video_output_sm], false);
 
   // Enable interrupt handler for field timing.
   irq_set_exclusive_handler(DMA_IRQ_0, field_timing_dma_handler);
@@ -235,6 +236,10 @@ int main() {
 
   // Start field timing.
   field_timing_dma_handler();
+
+  // Main loop
+  memcpy(frame_buffer, bronwen_data, bronwen_data_len);
   while (true) {
+    // nothing
   }
 }

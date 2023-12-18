@@ -1,0 +1,2 @@
+# When a picoprobe is connected, allow members of the dialout group to access it.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="000c", MODE="0660", GROUP="dialout"
