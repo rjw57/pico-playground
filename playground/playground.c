@@ -53,12 +53,15 @@ alignas(8) uint32_t timing_blank_line[] = {
 };
 #define TIMING_BLANK_LINE_LEN (sizeof(timing_blank_line) / sizeof(timing_blank_line[0]))
 
-// Timing program for a visible line
+// Timing program for a visible line. Note that we need to shift the visible portion by a few line
+// timing program clock cycles because of the difference in time between side effect and pin change
+// times.
 alignas(16) uint32_t timing_visible_line[] = {
     line_timing_encode(0, HSYNC_WIDTH_NS, SIDE_EFFECT_NOP),
-    line_timing_encode(1, BACK_PORCH_WIDTH_NS, SIDE_EFFECT_NOP),
+    line_timing_encode(1, BACK_PORCH_WIDTH_NS + (2 * LINE_TIMING_CLOCK_PERIOD_NS), SIDE_EFFECT_NOP),
     line_timing_encode(1, VISIBLE_WIDTH_NS, SIDE_EFFECT_SET_TRIGGER),
-    line_timing_encode(1, FRONT_PORCH_WIDTH_NS, SIDE_EFFECT_CLEAR_TRIGGER),
+    line_timing_encode(1, FRONT_PORCH_WIDTH_NS - (2 * LINE_TIMING_CLOCK_PERIOD_NS),
+                       SIDE_EFFECT_CLEAR_TRIGGER),
 };
 #define TIMING_VISIBLE_LINE_LEN (sizeof(timing_visible_line) / sizeof(timing_visible_line[0]))
 
