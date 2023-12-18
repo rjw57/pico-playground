@@ -6,7 +6,6 @@
 #include "hardware/pio.h"
 #include "pico/stdlib.h"
 
-#include "timing.pio.h"
 #include "tvout.pio.h"
 
 #include "bronwen.h"
@@ -41,10 +40,6 @@
 
 #define SYNC_GPIO_PIN 16                   // GPIO pin for SYNC signal == pin 21
 #define VIDEO_GPIO_PIN (SYNC_GPIO_PIN + 1) // == pin 22
-
-// Desired timing state machine clock frequency in hertz. Should be equal to the
-// dot frequency.
-#define TIMING_SM_FREQ (DOTS_PER_LINE * (1e9 / LINE_PERIOD_NS))
 
 // Timing program for a blank line
 alignas(8) uint32_t timing_blank_line[] = {
