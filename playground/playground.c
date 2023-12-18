@@ -116,6 +116,20 @@ static void field_timing_dma_handler() {
   // 0 - vsync A, 1 - vsync B, 2 - top blank lines, 3 - visible lines, 4 - bottom blank lines
   static uint phase = 0;
 
+  // Statically assert alignment and length of timing programs. Alignment is necessary to allow DMA
+  // in ring mode and the length needs to be known because we need to set the number of significan
+  // bits in ring mode.
+  static_assert(alignof(timing_long_sync_half_line) == sizeof(timing_long_sync_half_line));
+  static_assert(TIMING_LONG_SYNC_HALF_LINE_LEN == 2);
+  static_assert(alignof(timing_short_sync_half_line) == sizeof(timing_short_sync_half_line));
+  static_assert(TIMING_SHORT_SYNC_HALF_LINE_LEN == 2);
+  static_assert(alignof(timing_blank_line) == sizeof(timing_blank_line));
+  static_assert(TIMING_BLANK_LINE_LEN == 2);
+  static_assert(alignof(timing_visible_line) == sizeof(timing_visible_line));
+  static_assert(TIMING_VISIBLE_LINE_LEN == 4);
+  static_assert(VERT_VISIBLE_START_LINE > VSYNC_LINES_PER_FIELD);
+  static_assert(LINES_PER_FIELD > (VERT_VISIBLE_START_LINE + VISIBLE_LINES_PER_FIELD));
+
   dma_channel_acknowledge_irq0(field_timing_dma_channel);
 
   switch (phase) {
@@ -124,8 +138,6 @@ static void field_timing_dma_handler() {
     dma_channel_transfer_from_buffer_now(video_dma_channel, bronwen_data,
                                          VISIBLE_LINES_PER_FIELD * (VISIBLE_DOTS_PER_LINE >> 5));
     // "long pulse" half lines
-    static_assert((((int)timing_long_sync_half_line) % sizeof(timing_long_sync_half_line)) == 0);
-    static_assert(TIMING_LONG_SYNC_HALF_LINE_LEN == 2);
     channel_config_set_ring(&field_timing_dma_channel_config, false, 3);
     dma_channel_set_config(field_timing_dma_channel, &field_timing_dma_channel_config, false);
     dma_channel_transfer_from_buffer_now(field_timing_dma_channel, timing_long_sync_half_line,
@@ -133,8 +145,6 @@ static void field_timing_dma_handler() {
     break;
   case 1:
     // "short pulse" half lines
-    static_assert((((int)timing_short_sync_half_line) % sizeof(timing_short_sync_half_line)) == 0);
-    static_assert(TIMING_SHORT_SYNC_HALF_LINE_LEN == 2);
     channel_config_set_ring(&field_timing_dma_channel_config, false, 3);
     dma_channel_set_config(field_timing_dma_channel, &field_timing_dma_channel_config, false);
     dma_channel_transfer_from_buffer_now(field_timing_dma_channel, timing_short_sync_half_line,
@@ -142,9 +152,6 @@ static void field_timing_dma_handler() {
     break;
   case 2:
     // Top blank lines
-    static_assert((((int)timing_blank_line) % sizeof(timing_blank_line)) == 0);
-    static_assert(TIMING_BLANK_LINE_LEN == 2);
-    static_assert(VERT_VISIBLE_START_LINE > VSYNC_LINES_PER_FIELD);
     channel_config_set_ring(&field_timing_dma_channel_config, false, 3);
     dma_channel_set_config(field_timing_dma_channel, &field_timing_dma_channel_config, false);
     dma_channel_transfer_from_buffer_now(field_timing_dma_channel, timing_blank_line,
@@ -154,8 +161,6 @@ static void field_timing_dma_handler() {
     break;
   case 3:
     // Visible lines
-    static_assert((((int)timing_visible_line) % sizeof(timing_visible_line)) == 0);
-    static_assert(TIMING_VISIBLE_LINE_LEN == 4);
     channel_config_set_ring(&field_timing_dma_channel_config, false, 4);
     dma_channel_set_config(field_timing_dma_channel, &field_timing_dma_channel_config, false);
     dma_channel_transfer_from_buffer_now(field_timing_dma_channel, timing_visible_line,
@@ -163,9 +168,6 @@ static void field_timing_dma_handler() {
     break;
   case 4:
     // Bottom blank lines
-    static_assert((((int)timing_blank_line) % sizeof(timing_blank_line)) == 0);
-    static_assert(TIMING_BLANK_LINE_LEN == 2);
-    static_assert(LINES_PER_FIELD > (VERT_VISIBLE_START_LINE + VISIBLE_LINES_PER_FIELD));
     channel_config_set_ring(&field_timing_dma_channel_config, false, 3);
     dma_channel_set_config(field_timing_dma_channel, &field_timing_dma_channel_config, false);
     dma_channel_transfer_from_buffer_now(
