@@ -19,8 +19,8 @@ loop:
 .wrap
 
 % c-sdk {
-// Period of line timing PIO clock (ns). E.g. 50 => clock frequency of 20MHz
-#define LINE_TIMING_CLOCK_PERIOD_NS 50
+// Period of line timing PIO clock (ns). E.g. 32 => clock frequency of 31.25MHz
+#define LINE_TIMING_CLOCK_PERIOD_NS 32
 
 // Implied timing PIO frequency
 #define LINE_TIMING_CLOCK_FREQ (1e9 / LINE_TIMING_CLOCK_PERIOD_NS)

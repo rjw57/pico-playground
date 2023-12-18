@@ -17,7 +17,7 @@
 #define LINE_PERIOD_NS 64000                               // Period of one line of video (ns)
 #define LINES_PER_FIELD 310                                // Number of lines in a *field*
 #define HSYNC_WIDTH_NS 4700                                // Line sync pulse width (ns)
-#define HORIZ_OVERSCAN_NS 4000                             // Horizontal overscan (ns)
+#define HORIZ_OVERSCAN_NS 3472                             // Horizontal overscan (ns)
 #define VSYNC_LINES_PER_FIELD 5                            // V-sync lines at start of field
 #define VERT_OVERSCAN_LINES 8                              // Vertical overscan (lines per *field*)
 #define VERT_VISIBLE_START_LINE (23 + VERT_OVERSCAN_LINES) // Start line of visible data (0-based)
@@ -26,7 +26,7 @@
 #define VISIBLE_WIDTH_NS (52000 - (2 * HORIZ_OVERSCAN_NS)) // Visible area (ns)
 #define SHORT_SYNC_WIDTH_NS 2350                           // "Short" sync pulse width (ns)
 #define LONG_SYNC_WIDTH_NS 27300                           // "Long" sync pulse width (ns)
-#define DOTS_PER_LINE 512                                  // Dots per line (inc. invisible area)
+#define DOTS_PER_LINE 500                                  // Dots per line (inc. invisible area)
 
 // Implied back porch period
 #define BACK_PORCH_WIDTH_NS                                                                        \
