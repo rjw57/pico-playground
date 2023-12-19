@@ -1,10 +1,11 @@
 #include <stdalign.h>
-#include <string.h>
+#include <stdatomic.h>
 
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
 #include "hardware/pio.h"
 #include "pico/stdlib.h"
+#include "pico/sync.h"
 
 #include "tvout.h"
 #include "tvout.pio.h"
@@ -71,16 +72,39 @@ alignas(8) uint32_t timing_short_sync_half_line[] = {
 #define TIMING_SHORT_SYNC_HALF_LINE_LEN                                                            \
   (sizeof(timing_short_sync_half_line) / sizeof(timing_short_sync_half_line[0]))
 
-static void *frame_buffer_ptr;
+// Semaphore used to signal vblank.
+semaphore_t vblank_semaphore;
+
+// Current frame buffer pointer. Marked as atomic so that the ISR always gets a valid value.
+static atomic_uintptr_t frame_buffer_ptr;
+
+// Blanking interval callback
+static tvout_vblank_callback_t vblank_callback = NULL;
+
+// PIO-related configuration values.
+static uint video_output_sm;
+static uint video_output_offset;
+static uint line_timing_sm;
+static uint line_timing_offset;
+static PIO pio_instance;
+
+// Frame timing DMA channel number and config.
+static uint field_timing_dma_channel;
+static dma_channel_config field_timing_dma_channel_config;
+
+// Video data DMA channel number.
+static uint video_dma_channel;
 
 // Configure a DMA channel to copy the frame buffer into the video output PIO state machine.
-static inline dma_channel_config get_video_output_dma_channel_config(uint dma_chan, PIO pio,
-                                                                     uint sm) {
+static inline dma_channel_config
+get_video_output_dma_channel_config(uint dma_chan, PIO pio, uint sm,
+                                    bool byte_oriented_frame_buffer) {
   dma_channel_config c = dma_channel_get_default_config(dma_chan);
   channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
   channel_config_set_read_increment(&c, true);
   channel_config_set_write_increment(&c, false);
   channel_config_set_dreq(&c, pio_get_dreq(pio, sm, true));
+  channel_config_set_bswap(&c, byte_oriented_frame_buffer);
   return c;
 }
 
@@ -95,13 +119,6 @@ static inline dma_channel_config get_field_timing_dma_channel_config(uint dma_ch
   return c;
 }
 
-// Frame timing DMA channel number and config.
-static uint field_timing_dma_channel;
-static dma_channel_config field_timing_dma_channel_config;
-
-// Video data DMA channel number.
-static uint video_dma_channel;
-
 // DMA handler called when each phase of a frame timing is finished.
 static void field_timing_dma_handler() {
   // 0 - vsync A, 1 - vsync B, 2 - top blank lines, 3 - visible lines, 4 - bottom blank lines
@@ -112,7 +129,7 @@ static void field_timing_dma_handler() {
   switch (phase) {
   case 0:
     // Start frame buffer transfer for the next field.
-    dma_channel_transfer_from_buffer_now(video_dma_channel, frame_buffer_ptr,
+    dma_channel_transfer_from_buffer_now(video_dma_channel, (void *)atomic_load(&frame_buffer_ptr),
                                          VISIBLE_LINES_PER_FIELD * (VISIBLE_DOTS_PER_LINE >> 5));
     // "long pulse" half lines
     channel_config_set_ring(&field_timing_dma_channel_config, false, 3);
@@ -151,6 +168,14 @@ static void field_timing_dma_handler() {
         field_timing_dma_channel, timing_blank_line,
         TIMING_BLANK_LINE_LEN *
             (LINES_PER_FIELD - VERT_VISIBLE_START_LINE - VISIBLE_LINES_PER_FIELD));
+
+    // Release the vblank semaphore which will wake anything waiting on it.
+    sem_release(&vblank_semaphore);
+
+    // Call the vertical blanking interval callback, if one is configured.
+    if (vblank_callback != NULL) {
+      vblank_callback();
+    }
     break;
   }
 
@@ -184,14 +209,7 @@ static inline void all_static_asserts() {
   static_assert(LINES_PER_FIELD > (VERT_VISIBLE_START_LINE + VISIBLE_LINES_PER_FIELD));
 }
 
-// PIO-related configuration values.
-static uint video_output_sm;
-static uint video_output_offset;
-static uint line_timing_sm;
-static uint line_timing_offset;
-static PIO pio_instance;
-
-void tvout_init(PIO pio, uint sync_pin, uint video_pin) {
+void tvout_init(PIO pio, bool byte_oriented_frame_buffer, uint sync_pin, uint video_pin) {
   // Record which PIO instance is used.
   pio_instance = pio;
 
@@ -218,8 +236,8 @@ void tvout_init(PIO pio, uint sync_pin, uint video_pin) {
 
   // Configure DMA channel for copying frame buffer to video output.
   video_dma_channel = dma_claim_unused_channel(true);
-  dma_channel_config video_dma_channel_config =
-      get_video_output_dma_channel_config(video_dma_channel, pio_instance, video_output_sm);
+  dma_channel_config video_dma_channel_config = get_video_output_dma_channel_config(
+      video_dma_channel, pio_instance, video_output_sm, byte_oriented_frame_buffer);
   dma_channel_set_config(video_dma_channel, &video_dma_channel_config, false);
   dma_channel_set_write_addr(video_dma_channel, &pio_instance->txf[video_output_sm], false);
 
@@ -228,6 +246,8 @@ void tvout_init(PIO pio, uint sync_pin, uint video_pin) {
 }
 
 void tvout_start(void) {
+  sem_init(&vblank_semaphore, 0, 1);
+
   pio_sm_put(pio_instance, video_output_sm, VISIBLE_DOTS_PER_LINE - 1);
   pio_sm_set_enabled(pio_instance, video_output_sm, true);
   pio_sm_set_enabled(pio_instance, line_timing_sm, true);
@@ -252,8 +272,14 @@ void tvout_cleanup(void) {
   pio_sm_unclaim(pio_instance, line_timing_sm);
 }
 
+void tvout_set_vblank_callback(tvout_vblank_callback_t callback) { vblank_callback = callback; }
+
 uint tvout_get_screen_width(void) { return VISIBLE_DOTS_PER_LINE; }
 
 uint tvout_get_screen_height(void) { return VISIBLE_LINES_PER_FIELD; }
 
-void tvout_set_frame_buffer(void *frame_buffer) { frame_buffer_ptr = frame_buffer; }
+void tvout_set_frame_buffer(void *frame_buffer) {
+  atomic_store(&frame_buffer_ptr, (uintptr_t)frame_buffer);
+}
+
+void tvout_wait_for_vblank(void) { sem_acquire_blocking(&vblank_semaphore); }
