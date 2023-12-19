@@ -10,6 +10,10 @@
 #include "tvout.h"
 #include "tvout.pio.h"
 
+// Resolution
+#define VISIBLE_DOTS_PER_LINE 640                          // Horizontal resolution
+#define VISIBLE_LINES_PER_FIELD 256                        // Number of visible lines per field
+
 // TV signal timing. See http://martin.hinner.info/vga/pal.html. We repeatedly send the first field
 // which is sometimes known as "240p". (Or the PAL equivalent of "272p".)
 #define LINE_PERIOD_NS 64000                               // Period of one line of video (ns)
@@ -19,23 +23,17 @@
 #define VSYNC_LINES_PER_FIELD 5                            // V-sync lines at start of field
 #define VERT_OVERSCAN_LINES 16                             // Vertical overscan (lines per *field*)
 #define VERT_VISIBLE_START_LINE (23 + VERT_OVERSCAN_LINES) // Start line of visible data (0-based)
-#define VISIBLE_LINES_PER_FIELD 256                        // Number of visible lines per field
 #define FRONT_PORCH_WIDTH_NS (1650 + HORIZ_OVERSCAN_NS)    // Front porch width (ns)
 #define VISIBLE_WIDTH_NS (52000 - (2 * HORIZ_OVERSCAN_NS)) // Visible area (ns)
 #define SHORT_SYNC_WIDTH_NS 2350                           // "Short" sync pulse width (ns)
 #define LONG_SYNC_WIDTH_NS 27300                           // "Long" sync pulse width (ns)
-#define DOTS_PER_LINE 1000                                 // Dots per line (inc. invisible area)
 
 // Implied back porch period
 #define BACK_PORCH_WIDTH_NS                                                                        \
   (LINE_PERIOD_NS - VISIBLE_WIDTH_NS - FRONT_PORCH_WIDTH_NS - HSYNC_WIDTH_NS)
 
 // Implied dot frequency
-#define DOT_CLOCK_FREQ (DOTS_PER_LINE * (1e9 / LINE_PERIOD_NS))
-
-// Implied dot period and dots per visible line
-#define DOT_PERIOD_NS (LINE_PERIOD_NS / DOTS_PER_LINE)
-#define VISIBLE_DOTS_PER_LINE (VISIBLE_WIDTH_NS / DOT_PERIOD_NS)
+#define DOT_CLOCK_FREQ (VISIBLE_DOTS_PER_LINE * (1e9 / VISIBLE_WIDTH_NS))
 
 // Timing program for a blank line
 alignas(8) uint32_t timing_blank_line[] = {
@@ -185,9 +183,6 @@ static void field_timing_dma_handler() {
 // This function contains all static asserts. It's never called but the compiler will raise a
 // diagnostic if the assertions fail.
 static inline void all_static_asserts() {
-  // Check that all periods are an integer multiple of character period
-  static_assert(LINE_PERIOD_NS % DOT_PERIOD_NS == 0);
-
   // Check that the number of *visible* dots per line is a multiple of 32.
   static_assert((VISIBLE_DOTS_PER_LINE & 0x1f) == 0);
 
