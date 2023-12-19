@@ -10,21 +10,20 @@
 #include "tvout.pio.h"
 
 // TV signal timing. See http://martin.hinner.info/vga/pal.html. We repeatedly send the first field
-// which is sometimes known as "240p". (Or the PAL equivalent of "272p".) This works out as a
-// resolution of 352 x 272.
+// which is sometimes known as "240p". (Or the PAL equivalent of "272p".)
 #define LINE_PERIOD_NS 64000                               // Period of one line of video (ns)
 #define LINES_PER_FIELD 310                                // Number of lines in a *field*
 #define HSYNC_WIDTH_NS 4700                                // Line sync pulse width (ns)
-#define HORIZ_OVERSCAN_NS 3472                             // Horizontal overscan (ns)
+#define HORIZ_OVERSCAN_NS 5520                             // Horizontal overscan (ns)
 #define VSYNC_LINES_PER_FIELD 5                            // V-sync lines at start of field
-#define VERT_OVERSCAN_LINES 8                              // Vertical overscan (lines per *field*)
+#define VERT_OVERSCAN_LINES 16                             // Vertical overscan (lines per *field*)
 #define VERT_VISIBLE_START_LINE (23 + VERT_OVERSCAN_LINES) // Start line of visible data (0-based)
-#define VISIBLE_LINES_PER_FIELD 272                        // Number of visible lines per field
+#define VISIBLE_LINES_PER_FIELD 256                        // Number of visible lines per field
 #define FRONT_PORCH_WIDTH_NS (1650 + HORIZ_OVERSCAN_NS)    // Front porch width (ns)
 #define VISIBLE_WIDTH_NS (52000 - (2 * HORIZ_OVERSCAN_NS)) // Visible area (ns)
 #define SHORT_SYNC_WIDTH_NS 2350                           // "Short" sync pulse width (ns)
 #define LONG_SYNC_WIDTH_NS 27300                           // "Long" sync pulse width (ns)
-#define DOTS_PER_LINE 500                                  // Dots per line (inc. invisible area)
+#define DOTS_PER_LINE 1000                                 // Dots per line (inc. invisible area)
 
 // Implied back porch period
 #define BACK_PORCH_WIDTH_NS                                                                        \
@@ -36,9 +35,6 @@
 // Implied dot period and dots per visible line
 #define DOT_PERIOD_NS (LINE_PERIOD_NS / DOTS_PER_LINE)
 #define VISIBLE_DOTS_PER_LINE (VISIBLE_WIDTH_NS / DOT_PERIOD_NS)
-
-#define SYNC_GPIO_PIN 16                   // GPIO pin for SYNC signal == pin 21
-#define VIDEO_GPIO_PIN (SYNC_GPIO_PIN + 1) // == pin 22
 
 // Timing program for a blank line
 alignas(8) uint32_t timing_blank_line[] = {
@@ -195,7 +191,7 @@ static uint line_timing_sm;
 static uint line_timing_offset;
 static PIO pio_instance;
 
-void tvout_init(PIO pio) {
+void tvout_init(PIO pio, uint sync_pin, uint video_pin) {
   // Record which PIO instance is used.
   pio_instance = pio;
 
@@ -205,13 +201,13 @@ void tvout_init(PIO pio) {
   // Configure and enable output program
   video_output_offset = pio_add_program(pio_instance, &video_output_program);
   video_output_sm = pio_claim_unused_sm(pio_instance, true);
-  video_output_program_init(pio_instance, video_output_sm, video_output_offset, VIDEO_GPIO_PIN,
+  video_output_program_init(pio_instance, video_output_sm, video_output_offset, video_pin,
                             DOT_CLOCK_FREQ);
 
   // Configure and enable timing program.
   line_timing_offset = pio_add_program(pio_instance, &line_timing_program);
   line_timing_sm = pio_claim_unused_sm(pio_instance, true);
-  line_timing_program_init(pio_instance, line_timing_sm, line_timing_offset, SYNC_GPIO_PIN);
+  line_timing_program_init(pio_instance, line_timing_sm, line_timing_offset, sync_pin);
 
   // Configure frame timing DMA channel.
   field_timing_dma_channel = dma_claim_unused_channel(true);

@@ -4,7 +4,7 @@
 // TV-out uses two DMA channels claimed via dma_claim_unused_channel(), DMA IRQ 0, two PIO state
 // machines and IRQ for the PIO instance containing the state machines. Pass a PIO instance to
 // tvout_init() to specify which instance is used.
-void tvout_init(PIO pio);
+void tvout_init(PIO pio, uint sync_pin, uint video_pin);
 
 // Start TV-out. tvout_init() must have been called first.
 void tvout_start(void);

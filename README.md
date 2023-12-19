@@ -37,6 +37,7 @@ If using a RP2040-GEEK, use the appropriate connector cable to connect the SWD p
 RP2040-GEEK to the SWD pins of the pico. Connect the UART cable according to the following table:
 
 | RP2040-GEEK | Pico pin |
+|-|-|
 | GP5 | 1 (GP0) |
 | GND | 3 |
 | GP4 | 2 (GP1) 
