@@ -40,7 +40,7 @@ RP2040-GEEK to the SWD pins of the pico. Connect the UART cable according to the
 |-|-|
 | GP5 | 1 (GP0) |
 | GND | 3 |
-| GP4 | 2 (GP1) 
+| GP4 | 2 (GP1) |
 
 The serial console can be connected to via, e.g. `minicom`:
 
